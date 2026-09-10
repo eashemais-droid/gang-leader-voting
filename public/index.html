@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gang Leader Elections</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115;
+    color: #e8e8e8;
+    margin: 0;
+    padding: 40px 16px 80px;
+    display: flex;
+    justify-content: center;
+  }
+  .wrap { width: 100%; max-width: 560px; }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 28px;
+    text-align: center;
+  }
+  .card {
+    background: #181b21;
+    border: 1px solid #2a2e37;
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .card h2 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .card p.sub {
+    color: #9aa0aa;
+    font-size: 13px;
+    margin: 0 0 18px;
+  }
+  form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  input[type="text"] {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #333944;
+    background: #10131a;
+    color: #fff;
+    font-size: 14px;
+  }
+  input[type="text"]:focus { outline: none; border-color: #5b8cff; }
+  button {
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: none;
+    background: #5b8cff;
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #4676ea; }
+  button:disabled { background: #333944; cursor: not-allowed; }
+  .error {
+    color: #ff7b7b;
+    font-size: 12px;
+    margin: -10px 0 12px;
+    display: none;
+  }
+  .results { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row .name {
+    width: 100px;
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row .bar-track {
+    flex: 1;
+    height: 18px;
+    background: #10131a;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .row .bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #5b8cff, #7fa4ff);
+    border-radius: 6px;
+    transition: width 0.3s ease;
+  }
+  .row .count {
+    width: 24px;
+    text-align: right;
+    font-size: 12px;
+    color: #9aa0aa;
+  }
+  .empty {
+    color: #6b7280;
+    font-size: 13px;
+    padding: 4px 0;
+  }
+  .voted-tag {
+    display: inline-block;
+    background: #1c3a2a;
+    color: #6fd39a;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin-bottom: 12px;
+  }
+  .status {
+    font-size: 12px;
+    color: #6b7280;
+    text-align: center;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Gang leader elections</h1>
+  <div id="questions"></div>
+  <div class="status" id="statusMsg">Loading current results…</div>
+</div>
+
+<script>
+  const QUESTIONS = [
+    { id: 'redline', label: 'Redline Leader' },
+    { id: 'lostmc', label: 'LostMc Leader' },
+    { id: 'ballas', label: 'Ballas Leader' },
+    { id: 'families', label: 'Families Leader' },
+    { id: 'vagos', label: 'Vagos Leader' }
+  ];
+
+  const myVotes = {};
+  let allVotes = {};
+
+  const questionsEl = document.getElementById('questions');
+  const statusMsg = document.getElementById('statusMsg');
+
+  function buildCard(q) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <h2>${q.label}</h2>
+      <p class="sub">Type a name and submit your vote.</p>
+      <div class="voted-tag" id="tag-${q.id}" style="display:none;">You voted for <span></span></div>
+      <form id="form-${q.id}">
+        <input type="text" id="input-${q.id}" placeholder="Enter a name" maxlength="40" autocomplete="off" />
+        <button type="submit">Vote</button>
+      </form>
+      <div class="error" id="error-${q.id}">Enter a name first.</div>
+      <div class="results" id="results-${q.id}"></div>
+    `;
+    questionsEl.appendChild(card);
+
+    const form = card.querySelector(`#form-${q.id}`);
+    const input = card.querySelector(`#input-${q.id}`);
+    const errorEl = card.querySelector(`#error-${q.id}`);
+
+    input.addEventListener('input', () => { errorEl.style.display = 'none'; });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = input.value.trim();
+      if (!name) {
+        errorEl.style.display = 'block';
+        return;
+      }
+      errorEl.style.display = 'none';
+
+      const btn = form.querySelector('button');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/vote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: q.id,
+            name: name,
+            previousName: myVotes[q.id] || null
+          })
+        });
+        if (!res.ok) throw new Error('Request failed');
+        const data = await res.json();
+        allVotes = data;
+        myVotes[q.id] = name;
+
+        const tag = card.querySelector(`#tag-${q.id}`);
+        tag.style.display = 'inline-block';
+        tag.querySelector('span').textContent = name;
+
+        input.value = '';
+        renderResults(q.id);
+      } catch (err) {
+        statusMsg.textContent = 'Could not save your vote. Try again.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  function renderResults(questionId) {
+    const el = document.getElementById(`results-${questionId}`);
+    const data = allVotes[questionId] || {};
+    const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
+
+    if (entries.length === 0) {
+      el.innerHTML = '<div class="empty">No votes yet.</div>';
+      return;
+    }
+
+    const maxCount = Math.max(...entries.map(e => e[1]));
+    el.innerHTML = entries.map(([name, count]) => {
+      const pct = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
+      return `
+        <div class="row">
+          <div class="name" title="${name}">${name}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+          <div class="count">${count}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderAll() {
+    QUESTIONS.forEach(q => renderResults(q.id));
+  }
+
+  async function loadVotes() {
+    try {
+      const res = await fetch('/api/votes');
+      allVotes = await res.json();
+      renderAll();
+      statusMsg.textContent = 'Live results — updates when anyone votes.';
+    } catch (err) {
+      statusMsg.textContent = 'Could not load results. Refresh the page.';
+    }
+  }
+
+  QUESTIONS.forEach(buildCard);
+  loadVotes();
+  setInterval(loadVotes, 4000);
+</script>
+</body>
+</html>

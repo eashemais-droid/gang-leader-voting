@@ -127,10 +127,25 @@
 <div class="wrap">
   <h1>Gang leader elections</h1>
   <div id="questions"></div>
-  <div class="status" id="statusMsg">Loading current results…</div>
+  <div class="status" id="statusMsg">Connecting…</div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
 <script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyA3yuovSgzt_dj6eyft36LVktnDc_xNqwg",
+    authDomain: "glory-voting.firebaseapp.com",
+    databaseURL: "https://glory-voting-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "glory-voting",
+    storageBucket: "glory-voting.firebasestorage.app",
+    messagingSenderId: "826097192053",
+    appId: "1:826097192053:web:ad152fce56e1eddd433c3c"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
   const QUESTIONS = [
     { id: 'redline', label: 'Redline Leader' },
     { id: 'lostmc', label: 'LostMc Leader' },
@@ -140,10 +155,13 @@
   ];
 
   const myVotes = {};
-  let allVotes = {};
-
   const questionsEl = document.getElementById('questions');
   const statusMsg = document.getElementById('statusMsg');
+
+  function sanitizeKey(name) {
+    // Firebase keys can't contain . # $ [ ] /
+    return name.replace(/[.#$\[\]\/]/g, '_');
+  }
 
   function buildCard(q) {
     const card = document.createElement('div');
@@ -169,8 +187,8 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const name = input.value.trim();
-      if (!name) {
+      const rawName = input.value.trim();
+      if (!rawName) {
         errorEl.style.display = 'block';
         return;
       }
@@ -178,39 +196,55 @@
 
       const btn = form.querySelector('button');
       btn.disabled = true;
+
       try {
-        const res = await fetch('/api/vote', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            question: q.id,
-            name: name,
-            previousName: myVotes[q.id] || null
-          })
+        const key = sanitizeKey(rawName);
+        const previous = myVotes[q.id];
+
+        if (previous && previous.key !== key) {
+          const prevRef = db.ref(`votes/${q.id}/${previous.key}`);
+          await prevRef.transaction(current => Math.max(0, (current || 1) - 1));
+        }
+
+        const ref = db.ref(`votes/${q.id}/${key}`);
+        await ref.transaction(current => {
+          if (previous && previous.key === key) return current || 1;
+          return (current || 0) + 1;
         });
-        if (!res.ok) throw new Error('Request failed');
-        const data = await res.json();
-        allVotes = data;
-        myVotes[q.id] = name;
+
+        // store the display name separately so we show what they typed
+        await db.ref(`names/${q.id}/${key}`).set(rawName);
+
+        myVotes[q.id] = { key, name: rawName };
 
         const tag = card.querySelector(`#tag-${q.id}`);
         tag.style.display = 'inline-block';
-        tag.querySelector('span').textContent = name;
+        tag.querySelector('span').textContent = rawName;
 
         input.value = '';
-        renderResults(q.id);
       } catch (err) {
         statusMsg.textContent = 'Could not save your vote. Try again.';
       } finally {
         btn.disabled = false;
       }
     });
+
+    // Live listener for this question's votes
+    db.ref(`votes/${q.id}`).on('value', async (snapshot) => {
+      const votes = snapshot.val() || {};
+      const namesSnap = await db.ref(`names/${q.id}`).once('value');
+      const names = namesSnap.val() || {};
+      renderResults(q.id, votes, names);
+      statusMsg.textContent = 'Live results — updates instantly for everyone.';
+    });
   }
 
-  function renderResults(questionId) {
+  function renderResults(questionId, votes, names) {
     const el = document.getElementById(`results-${questionId}`);
-    const data = allVotes[questionId] || {};
-    const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
+    const entries = Object.entries(votes)
+      .filter(([, count]) => count > 0)
+      .map(([key, count]) => [names[key] || key, count])
+      .sort((a, b) => b[1] - a[1]);
 
     if (entries.length === 0) {
       el.innerHTML = '<div class="empty">No votes yet.</div>';
@@ -230,24 +264,7 @@
     }).join('');
   }
 
-  function renderAll() {
-    QUESTIONS.forEach(q => renderResults(q.id));
-  }
-
-  async function loadVotes() {
-    try {
-      const res = await fetch('/api/votes');
-      allVotes = await res.json();
-      renderAll();
-      statusMsg.textContent = 'Live results — updates when anyone votes.';
-    } catch (err) {
-      statusMsg.textContent = 'Could not load results. Refresh the page.';
-    }
-  }
-
   QUESTIONS.forEach(buildCard);
-  loadVotes();
-  setInterval(loadVotes, 4000);
 </script>
 </body>
 </html>
